@@ -6,7 +6,7 @@ Usage:
   at91_loader.py -h | --help
   at91_loader.py --version
   at91_loader.py  -i | --interactive
-  at91_loader.py run [--device=<STR>] [--address=<HEX>] [--interactive]  
+  at91_loader.py run [--device=<STR>] [--filename=<STR>] [--address=<HEX>] [--interactive]  
   at91_loader.py dump [--device=<STR>] --address=<HEX> [--size=<INT>]  [--interactive] 
   at91_loader.py read [--device=<STR>] --address=<HEX> [--interactive]
   at91_loader.py write [--device=<STR>] --address=<HEX> (--data=<HEX> | --value=<HEX>) [--interactive]
@@ -15,7 +15,8 @@ Options:
   -h --help            Show this screen.
   --version            Show version.
   -d --device=<STR>    Serial device [default: /dev/ttyACM0]
-  -a --address=<HEX>   Address where dump memory starts or code is loaded
+  -a --address=<HEX>   Address where dump memory starts or code is loaded [default: 308000]
+  -f --filename=<STR>  BIN file for execution [default: ./applets/mk/firmware.bin]
   -s --size=<INT>         Size of the dump [default: 256]
   --data=<HEX>         Data to write  
   -v --value=<HEX>       Same as --data  
@@ -46,7 +47,7 @@ def convertToInt(s, base):
         value = int(s, base);
         result = True;
     except:
-        log.error("Bad formed number '{0}'".format(s));
+        logger.error("Bad formed number '{0}'".format(s));
         result = False;
     return (result, value);
 
@@ -56,7 +57,7 @@ def openFile(filename, flag):
     try:
         fileHandle = open(filename, flag) # read text file
     except Exception:
-        log.error('Failed to open file {0}'.format(filename))
+        logger.error('Failed to open file {0}'.format(filename))
         print sys.exc_info()
         return (False, None)
     else:
@@ -125,12 +126,66 @@ class cmdGroundLevel(cmd.Cmd):
     Interactive command line interface 
     '''
     
-    def do_dump(self, line):
-        print "Dump memory"
+    def init(self, at91):
+        '''
+        I can not subclass old style class
+        '''
+        self.at91 = at91
+        (self.dumpAddressStr, self.dumpSizeStr) = ('0x308000', '256')
+        (self.runFilename, self.runAddressStr) = ('./applets/mk/firmware.bin', '308000')
     
-    def do_run(self, line):
-        print "Load and run code"
+    def do_status(self, line):
+        
+        # Get status
+        if (self.at91.isConnected):
+            isConnectedStr = "up"
+        else:
+            isConnectedStr = "down"
+            
+        # Print status
+        print "Connection: {0}".format(isConnectedStr)
+        if (line == 'full'):
+            print "Dump default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
+            print "Run default args: addrress={0} size={1}".format(self.runFilename, self.runAddressStr)
+            
+        
+    def help_status(self):
+        print "Print systems status, like last commands, last used address, connection state"
+        print "Usage:status [brief|full]"
+    
+    def do_dump(self, line):
+        words = line.split()
+        if (len(words) == 2):
+            result = printDump(self.at91, words[0], words[1])
+            if (result):
+                (self.dumpAddressStr, self.dumpSizeStr) = (words[0], words[1])
+        elif (len(words) == 0): 
+            printDump(self.at91, self.dumpAddressStr, self.dumpSizeStr)
+        else:
+            self.help_dump()
+        print        
+    
+    def help_dump(self):
+        print "Dump memory"
+        print "Usage:dump [address=<HEX>] [size=<INT>]"
+        print "Default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
 
+    def do_run(self, line):
+        words = line.split()
+        if (len(words) == 2):
+            result = executeCode(at91, words[0], words[1])
+            if (result):
+                (self.runFilename, self.runAddressStr) = (words[0], words[1])
+        elif (len(words) == 0): 
+            executeCode(self.at91, self.runFilename, self.runAddressStr)
+        else:
+            self.help_run()
+
+    def help_run(self):
+        print "Load and run code"
+        print "Usage:dump [fileaname=<STR>] [address=<HEX>]"
+        print "Default args: filename={0} address={1}".format(self.runFilename, self.runAddressStr)
+        
     def do_read(self, line):
         print "Read memory"
 
@@ -166,6 +221,10 @@ class cmdGroundLevel(cmd.Cmd):
 
         return completions
 
+    def help_beep(self):
+        print "Test system beep"
+        print "Usage: beep [test|start|cancel|exit|stop]"
+
     def closeAll(self):
         beepSound.disable()
         at91.cancel()
@@ -181,7 +240,7 @@ class SerialConnection:
         tty.bytesize=serial.EIGHTBITS;
         tty.parity=serial.PARITY_NONE;
         tty.stopbits=serial.STOPBITS_ONE;
-        tty.timeout=10;
+        tty.timeout=0.1;
         tty.writeTimeout=0;
         tty.xonxoff=False;
         tty.rtscts=False;
@@ -212,7 +271,7 @@ class SerialConnection:
             except Exception:
                 pass
                 # traceback.print_exc();
-                # log.error("Failed to toggle baud rate for the I/O")
+                # logger.error("Failed to toggle baud rate for the I/O")
                 
             return result
 
@@ -276,8 +335,8 @@ class SerialConnection:
             s = tty.read(expectedCount)
             result = True
         except Exception:
-            log.error("Failed to read TTY")
-            traceback.print_exc();
+            logger.error("Failed to read TTY")
+            #traceback.print_exc();
     
         return (result, s)
 
@@ -337,14 +396,21 @@ class AT91(threading.Thread):
             if (not result):
                 break
             
+            result = False
             (result, s) = self.tty.read(2)
             if (not result):
                 break
             
+            result = False
+            if (s == ""):
+                break
+            
+            result = False
             if (s != "\n\r"):
                 logger.error("Read unexpected data {0}".format(s));
                 break
 
+            result = True
             break
         
         return result;
@@ -366,11 +432,23 @@ class AT91(threading.Thread):
     def cancel(self):
         self.exitFlag = True
         
-    def executeCode(self, address, entryPoint, code, timeout=1.0):
+    def executeCode(self, address, entryPoint, code, timeout=0.2):
         '''
         Load binary code to the specified location, execute, wait for completion
         '''
         self.lock.acquire()
+        
+        # copy the code 
+        s = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
+        self.tty.write(s)
+        self.tty.write(code)
+        
+        # execute the code
+        s = "G{0}#".format(buildhexstring(address))  
+        self.tty.write(s)
+        
+        time.sleep(timeout)
+        
         self.lock.release()
 
     def dump(self, address, size):
@@ -397,28 +475,70 @@ def printDump(at91, addressStr, sizeStr):
     (result, addressInt) = convertToInt(addressStr, 16)    
     if (not result):
        logger.error("Address '{0}' is not valid hexadecimal integer".format(addressStr))
-       return
+       return result
     
     (result, sizeInt) = convertToInt(sizeStr, 10)
     if (not result):
        logger.error("Size '{0}' is not valid integer".format(sizeStr))
-       return 
-    
-    (result, data) = at91.dump(addressInt, sizeInt)
-    if (not result):
-       logger.error("Failed to dump {0}".format(buildhexstring(addressInt, 8)))
-       return 
-    
-    print "{0}: ".format(buildhexstring(addressInt, 8)),
+       return result
+
+    blockSize = 128
     count = 0
-    for d in data:
-        s = buildhexstring(ord(d), 2)
-        print s,
-        count = count + 1
-        if ((count % 16 == 0) and (count < len(data))):
-            print
-            print "{0}: ".format(buildhexstring(addressInt+count, 8)),
+    blocks = 0
+    totalBytes = sizeInt 
+    print "{0}: ".format(buildhexstring(addressInt, 8)),
+    while (sizeInt > 0):    
+        if (sizeInt > blockSize):
+            (result, data) = at91.dump(addressInt+blocks*blockSize, blockSize)
+        else:
+            (result, data) = at91.dump(addressInt+blocks*blockSize, sizeInt)
+        if (not result):
+            logger.error("Failed to dump {0}".format(buildhexstring(addressInt, 8)))
+            return 
+        sizeInt = sizeInt - blockSize
+        blocks = blocks + 1
     
+        for d in data:
+            s = buildhexstring(ord(d), 2)
+            print s,
+            count = count + 1
+            if ((count % 16 == 0) and (count < totalBytes)):
+                print
+                print "{0}: ".format(buildhexstring(addressInt+count, 8)),
+                
+    return True
+
+def executeCode(at91, filename, addressStr):
+    file = None
+
+    (result, addressInt) = convertToInt(addressStr, 16)    
+    if (not result):
+       logger.error("Address '{0}' is not valid hexadecimal integer".format(addressStr))
+       return
+    
+    while (True):
+        (result, file) = openFile(filename, "rb")
+        if (not result):
+            logger.error("Failed to open file '{0}' for reading".format(filename))
+            break;
+
+        fileSize = os.path.getsize(filename)
+        if (fileSize <= 0):
+            logger.error("Failed to get size of the file '{0}'".format(filename))
+            break;
+   
+        data = file.read()
+        if (len(data) != fileSize):
+            logger.error("Read {0} bytes instead of {1} from file {2}".format(len(data), fileSize, filename))
+            break;
+    
+        at91.executeCode(addressInt, addressInt, data)    
+        break
+    
+    if (file != None):
+        file.close()
+        
+        
     
 if __name__ == '__main__':
     arguments = docopt(__doc__, version='AT91 loader 0.1')
@@ -439,8 +559,14 @@ if __name__ == '__main__':
     if (arguments['dump']):
         printDump(at91, arguments['--address'], arguments['--size'])
         
+    if (arguments['run']):
+        executeCode(at91, arguments['--filename'], arguments['--address'])
+        
     # Enter main command loop if interactive mode is enabled
-    if (arguments['--interactive']): 
-        cmdGroundLevel().cmdloop()
+    if (arguments['--interactive']):
+        print "" 
+        c = cmdGroundLevel()
+        c.init(at91)
+        c.cmdloop()
     else:
         at91.cancel()
