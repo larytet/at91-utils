@@ -53,6 +53,7 @@ TARGET = firmware
 CSRCS = \
        src/main.c                  \
        src/sram_startup.S                  \
+       src/ddr.c                  \
 
 
 

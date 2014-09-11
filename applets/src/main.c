@@ -1,10 +1,21 @@
 #include <stdint.h>
 
+
+#include "configure.h"
+#include "ddr.h"
+
 /**
  * Firmware main() function
  */
 int main(int argc, char **argv)
 {
-	*(volatile uint32_t*)0x308000 = 0x1f4e5601;
+#if (CONFIGURE_DDR2 != 0)
+	ddr_configure(DDR_TYPE_MT47H64M16HR);
+#endif
+
+#if (CONFIGURE_DDR_TEST != 0)
+	ddr_test();
+#endif
+
     return 0;
 }

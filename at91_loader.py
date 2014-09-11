@@ -9,7 +9,7 @@ Usage:
   at91_loader.py run [--device=<STR>] [--filename=<STR>] [--address=<HEX>] [--interactive]  
   at91_loader.py dump [--device=<STR>] --address=<HEX> [--size=<INT>]  [--interactive] 
   at91_loader.py read [--device=<STR>] --address=<HEX> [--interactive]
-  at91_loader.py write [--device=<STR>] --address=<HEX> (--data=<HEX> | --value=<HEX>) [--interactive]
+  at91_loader.py write [--device=<STR>] --address=<HEX> --data=<HEX> [--interactive]
 
 Options:
   -h --help            Show this screen.
@@ -17,9 +17,8 @@ Options:
   -d --device=<STR>    Serial device [default: /dev/ttyACM0]
   -a --address=<HEX>   Address where dump memory starts or code is loaded [default: 308000]
   -f --filename=<STR>  BIN file for execution [default: ./applets/mk/firmware.bin]
-  -s --size=<INT>         Size of the dump [default: 256]
+  -s --size=<INT>      Size of the dump [default: 256]
   --data=<HEX>         Data to write  
-  -v --value=<HEX>       Same as --data  
   -i --interactive     Interactive mode
 """
 
@@ -133,6 +132,7 @@ class cmdGroundLevel(cmd.Cmd):
         self.at91 = at91
         (self.dumpAddressStr, self.dumpSizeStr) = ('0x308000', '256')
         (self.runFilename, self.runAddressStr) = ('./applets/mk/firmware.bin', '308000')
+        (self.writeAddressStr, self.writeValueStr) = ('0x308000', '11AE325501') 
     
     def do_status(self, line):
         
@@ -146,7 +146,8 @@ class cmdGroundLevel(cmd.Cmd):
         print "Connection: {0}".format(isConnectedStr)
         if (line == 'full'):
             print "Dump default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
-            print "Run default args: addrress={0} size={1}".format(self.runFilename, self.runAddressStr)
+            print "Run default args: filename={0} address={1}".format(self.runFilename, self.runAddressStr)
+            print "Write default args: addrress={0} value={1}".format(self.writeAddressStr, self.writeValueStr)
             
         
     def help_status(self):
@@ -159,6 +160,10 @@ class cmdGroundLevel(cmd.Cmd):
             result = printDump(self.at91, words[0], words[1])
             if (result):
                 (self.dumpAddressStr, self.dumpSizeStr) = (words[0], words[1])
+        elif (len(words) == 1): 
+            result = printDump(self.at91, words[0], self.dumpSizeStr)
+            if (result):
+                self.dumpAddressStr = words[0]
         elif (len(words) == 0): 
             printDump(self.at91, self.dumpAddressStr, self.dumpSizeStr)
         else:
@@ -190,7 +195,22 @@ class cmdGroundLevel(cmd.Cmd):
         print "Read memory"
 
     def do_write(self, line):
+        words = line.split()
+        if (len(words) == 2):
+            result = writeData(self.at91, words[0], words[1])
+            if (result):
+                (self.writeAddressStr, self.writeValueStr) = (words[0], words[1])
+        elif (len(words) == 0): 
+            writeData(self.at91, self.writeAddressStr, self.writeValueStr)
+        else:
+            self.help_write()
+        print        
+        
+
+    def help_write(self):
         print "Write memory"
+        print "Usage:write [address=<HEX>] [value=<HEX>]"
+        print "Default args: address={0} value={1}".format(self.writeAddressStr, self.writeValueStr)
 
     def do_exit(self, line):
         self.closeAll()
@@ -240,7 +260,7 @@ class SerialConnection:
         tty.bytesize=serial.EIGHTBITS;
         tty.parity=serial.PARITY_NONE;
         tty.stopbits=serial.STOPBITS_ONE;
-        tty.timeout=0.1;
+        tty.timeout=0.01;
         tty.writeTimeout=0;
         tty.xonxoff=False;
         tty.rtscts=False;
@@ -349,7 +369,6 @@ class AT91(threading.Thread):
     '''
     Keep connection alive, polls the connection while idle and makes sure that SAM-BA still responds 
     '''        
-    INIT_COMMAND = "N#"
     def __init__(self, device):
         super(AT91, self).__init__()
         self.lock = threading.Lock()
@@ -367,7 +386,7 @@ class AT91(threading.Thread):
             self.__checkConnection()
             self.lock.release()
             
-            time.sleep(0.5)
+            time.sleep(0.005)
 
     def __checkConnection(self):
         isConnected = self.__isConnected()
@@ -378,10 +397,11 @@ class AT91(threading.Thread):
     def waitConnection(self, timeout=1.0):
         loopsTotal = 10
         loops = 0
-        while (not self.isConnected):
-            self.lock.acquire()
-            self.__checkConnection()
-            self.lock.release()
+        self.isConnected = False 
+        while (True):
+
+            if (self.isConnected):
+                break
             
             time.sleep(timeout/loopsTotal)
             loops = loops + 1
@@ -392,17 +412,20 @@ class AT91(threading.Thread):
         
     def __isConnected(self):
         while (True):
-            result = self.tty.write(AT91.INIT_COMMAND)
+            INIT_COMMAND = "N#"
+            result = self.tty.write(INIT_COMMAND)
             if (not result):
                 break
             
             result = False
             (result, s) = self.tty.read(2)
             if (not result):
+                #logger.error("Failed to read");
                 break
             
             result = False
             if (s == ""):
+                #logger.error("Read no data");
                 break
             
             result = False
@@ -432,22 +455,24 @@ class AT91(threading.Thread):
     def cancel(self):
         self.exitFlag = True
         
-    def executeCode(self, address, entryPoint, code, timeout=0.2):
+    def executeCode(self, address, entryPoint, code, timeout=0.0):
         '''
         Load binary code to the specified location, execute, wait for completion
         '''
+        s1 = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
+        s2 = "G{0}#".format(buildhexstring(address))
+          
         self.lock.acquire()
         
         # copy the code 
-        s = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
-        self.tty.write(s)
+        self.tty.write(s1)
         self.tty.write(code)
         
         # execute the code
-        s = "G{0}#".format(buildhexstring(address))  
-        self.tty.write(s)
+        self.tty.write(s2)
         
-        time.sleep(timeout)
+        if (timeout > 0):
+            time.sleep(timeout)
         
         self.lock.release()
 
@@ -455,10 +480,13 @@ class AT91(threading.Thread):
         '''
         Read memory from the device
         '''
-        s = "R{0},{1}#".format(buildhexstring(address), buildhexstring(size))  
+        s = "R{0},{1}#".format(buildhexstring(address), buildhexstring(size))
+          
         self.lock.acquire()
+        
         self.tty.write(s)
         (result, data) = self.tty.read(size)
+        
         self.lock.release()
         
         return (result, data)
@@ -467,8 +495,15 @@ class AT91(threading.Thread):
         '''
         Write memory
         '''
+        s = "W{0},{1}#".format(buildhexstring(address), buildhexstring(data))
+        
         self.lock.acquire()
+        
+        self.tty.write(s)
+        
         self.lock.release()
+
+        return True
 
 def printDump(at91, addressStr, sizeStr):
     
@@ -508,7 +543,7 @@ def printDump(at91, addressStr, sizeStr):
                 
     return True
 
-def executeCode(at91, filename, addressStr):
+def executeCode(at91, filename, addressStr, timeout=5.0):
     file = None
 
     (result, addressInt) = convertToInt(addressStr, 16)    
@@ -532,13 +567,32 @@ def executeCode(at91, filename, addressStr):
             logger.error("Read {0} bytes instead of {1} from file {2}".format(len(data), fileSize, filename))
             break;
     
-        at91.executeCode(addressInt, addressInt, data)    
+        at91.executeCode(addressInt, addressInt, data) 
+        
+        if (timeout > 0):
+            at91.waitConnection(timeout)
+
         break
     
     if (file != None):
         file.close()
         
         
+def writeData(at91, addressStr, valueStr):
+    
+    (result, addressInt) = convertToInt(addressStr, 16)    
+    if (not result):
+       logger.error("Address '{0}' is not valid hexadecimal integer".format(addressStr))
+       return result
+    
+    (result, valueInt) = convertToInt(valueStr, 16)
+    if (not result):
+       logger.error("Value '{0}' is not valid hexadecimal integer".format(valueStr))
+       return result
+
+    at91.write(addressInt, valueInt)
+   
+    return True 
     
 if __name__ == '__main__':
     arguments = docopt(__doc__, version='AT91 loader 0.1')
@@ -561,6 +615,9 @@ if __name__ == '__main__':
         
     if (arguments['run']):
         executeCode(at91, arguments['--filename'], arguments['--address'])
+
+    if (arguments['write']):
+        writeData(at91, arguments['--address'], arguments['--data'])
         
     # Enter main command loop if interactive mode is enabled
     if (arguments['--interactive']):
