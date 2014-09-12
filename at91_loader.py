@@ -31,7 +31,7 @@ import threading
 import subprocess
 import serial, random, time
 
-import sys
+import sys, traceback
 import os
 import re
 
@@ -75,6 +75,100 @@ def buildhexstring(value, width=0, prefix=''):
 
     return valueStr
 
+
+class StatManager:
+    '''
+    A single place where references to all blocks off debug counters is stored
+    '''
+    def __init__(self):
+        self.groups = {}
+
+    class Block:
+        def __init__(self, name):
+            self.name = name
+            self.ignoreFields = []
+            
+            #  All fields added so far are in the ignore list
+            for fieldName in self.__dict__:
+                self.ignoreFields.append(fieldName)
+
+        
+        def addField(self, name, initialValue=None):
+            '''
+            Add a field with specified name
+            '''
+            self.__dict__[name] = initialValue
+
+        def addFields(self, fields):
+            '''
+            @fields List of field names
+            '''
+            for f in fields:
+                self.addField(f, 0)
+            
+    def addCounters(self, groupName, block):
+        '''
+        Add a block of counters to the specified group
+        @groupName is a name of the group, for example 'txCounters'
+        @block Object of type Block
+        '''
+        if (not groupName in self.groups):
+            self.groups[groupName] = []
+        group = self.groups[groupName]
+        group.append(block) 
+
+    def __isPrintableField(self, block, fieldName):
+        result = fieldName in block.ignoreFields
+        return (not result)
+        
+    def printGroup(self, groupName):
+        '''
+        Print counters from the specified by name group 
+        '''
+        counters = self.groups[groupName]
+        if (len(counters) <= 0):
+            return
+        fieldPattern = "{:>14}"
+            
+        # Print column names
+        print fieldPattern.format(groupName),
+        o = counters[0]
+        for fieldName in o.__dict__:
+            if (self.__isPrintableField(o, fieldName)):
+                print fieldPattern.format(fieldName),
+        print
+
+        separatorLength = 14
+        separator = ""
+        while (separatorLength > 0):
+            separator = separator + "-"
+            separatorLength = separatorLength - 1
+             
+        fields = len(o.__dict__)  + 1 - len(o.ignoreFields)
+        while (fields > 0):
+            fields = fields - 1
+            print separator,
+        print
+        
+        # Print table data
+        for counter in counters:
+            # Print the name of the counter block
+            print fieldPattern.format(counter.name),
+            for fieldName in counter.__dict__:
+                if (self.__isPrintableField(counter, fieldName)):
+                    print fieldPattern.format(counter.__dict__[fieldName]),
+            print    
+        
+    def printAll(self):
+        '''
+        Print counters from all registered groups
+        '''
+        for groupName in self.groups:
+            self.printGroup(groupName)
+            print
+            
+
+statManager = StatManager()
 
 class Sound:
     def __init__(self):
@@ -174,6 +268,12 @@ class cmdGroundLevel(cmd.Cmd):
         print "Dump memory"
         print "Usage:dump [address=<HEX>] [size=<INT>]"
         print "Default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
+        
+    def do_stat(self, line):
+        statManager.printAll()
+
+    def help_stat(self):
+        print "Print debug statistics"
 
     def do_run(self, line):
         words = line.split()
@@ -253,6 +353,7 @@ class cmdGroundLevel(cmd.Cmd):
 
 class SerialConnection:
     
+    
     def __init__(self, device, rate):
         tty = serial.Serial();
         tty.port = device;
@@ -267,6 +368,9 @@ class SerialConnection:
         tty.dsrdtr=False;
         self.tty = tty
         self.device = device
+        self.stat = StatManager.Block("")
+        self.stat.addFields(["rx", "tx", "rxFailed", "txFailed"])
+        statManager.addCounters("SerialConnection", self.stat)
 
     def reset(self):
         tty = self.tty
@@ -335,9 +439,10 @@ class SerialConnection:
         try:
             tty.flush();
             tty.write(data);
+            self.stat.tx = self.stat.tx + 1
             result = True
         except Exception:
-            pass
+            self.stat.txFailed = self.stat.txFailed + 1
             #tty.flush();
             #traceback.print_exc();
             
@@ -353,8 +458,10 @@ class SerialConnection:
         result = False
         try:
             s = tty.read(expectedCount)
+            self.stat.rx = self.stat.rx + 1
             result = True
         except Exception:
+            self.stat.rxFailed = self.stat.rxFailed + 1
             logger.error("Failed to read TTY")
             #traceback.print_exc();
     
@@ -375,10 +482,13 @@ class AT91(threading.Thread):
         self.exitFlag = False
         self.isConnected = False
         self.tty = SerialConnection(device, 115200)
+        self.stat = StatManager.Block("")
+        self.stat.addFields(["dump", "write", "executeCode", "failed"])
+        statManager.addCounters("AT91", self.stat)
         
     def run(self):
         '''
-        Overloaded Thread.run
+        Check conneciton periodically
         '''
         while (not self.exitFlag):
             
@@ -386,11 +496,12 @@ class AT91(threading.Thread):
             self.__checkConnection()
             self.lock.release()
             
-            time.sleep(0.005)
+            time.sleep(0.05)
 
     def __checkConnection(self):
         isConnected = self.__isConnected()
         if (not isConnected):
+            self.stat.failed = self.stat.failed + 1
             self.tty.connect()
         self.__updateConnectionStatus(isConnected)
 
@@ -461,7 +572,7 @@ class AT91(threading.Thread):
         '''
         s1 = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
         s2 = "G{0}#".format(buildhexstring(address))
-          
+        self.stat.executeCode = self.stat.executeCode + 1
         self.lock.acquire()
         
         # copy the code 
@@ -482,6 +593,7 @@ class AT91(threading.Thread):
         '''
         s = "R{0},{1}#".format(buildhexstring(address), buildhexstring(size))
           
+        self.stat.dump = self.stat.dump + 1
         self.lock.acquire()
         
         self.tty.write(s)
@@ -497,6 +609,7 @@ class AT91(threading.Thread):
         '''
         s = "W{0},{1}#".format(buildhexstring(address), buildhexstring(data))
         
+        self.stat.write = self.stat.write + 1
         self.lock.acquire()
         
         self.tty.write(s)
