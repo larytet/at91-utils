@@ -85,6 +85,11 @@ class StatManager:
 
     class Block:
         def __init__(self, name):
+            '''
+            @param name is a name of the block. 
+            Useful when there are many instances of the same set of counters. 
+            For example "eth0", "eth1"
+            '''
             self.name = name
             self.ignoreFields = []
             
@@ -93,24 +98,32 @@ class StatManager:
                 self.ignoreFields.append(fieldName)
 
         
-        def addField(self, name, initialValue=None):
+        def addField(self, (name, initialValue)):
             '''
             Add a field with specified name
+            @param name is a name of the counter, for example "tx"
             '''
             self.__dict__[name] = initialValue
 
         def addFields(self, fields):
             '''
-            @fields List of field names
+            @param fields list of tuples (field name, iniitial value)
             '''
             for f in fields:
-                self.addField(f, 0)
+                self.addField(f)
+
+        def addFieldsInt(self, fields):
+            '''
+            @param fields list of field names
+            '''
+            for f in fields:
+                self.addField((f, 0))
             
     def addCounters(self, groupName, block):
         '''
         Add a block of counters to the specified group
-        @groupName is a name of the group, for example 'txCounters'
-        @block Object of type Block
+        @param groupName is a name of the group, for example "Network traffic"
+        @param block is an object of type Block
         '''
         if (not groupName in self.groups):
             self.groups[groupName] = []
@@ -228,6 +241,17 @@ class cmdGroundLevel(cmd.Cmd):
         (self.runFilename, self.runAddressStr) = ('./applets/mk/firmware.bin', '308000')
         (self.writeAddressStr, self.writeValueStr) = ('0x308000', '11AE325501') 
     
+    
+    def emptyline(self):
+        '''
+        If empty line repeat last sent command, unless this is run
+        '''
+        lastcmd = self.lastcmd
+        if (lastcmd.startswith("run")):
+            pass
+        else:
+            self.onecmd(lastcmd)
+        
     def do_status(self, line):
         
         # Get status
@@ -269,10 +293,10 @@ class cmdGroundLevel(cmd.Cmd):
         print "Usage:dump [address=<HEX>] [size=<INT>]"
         print "Default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
         
-    def do_stat(self, line):
+    def do_statistics(self, line):
         statManager.printAll()
 
-    def help_stat(self):
+    def help_statistics(self):
         print "Print debug statistics"
 
     def do_run(self, line):
@@ -369,7 +393,7 @@ class SerialConnection:
         self.tty = tty
         self.device = device
         self.stat = StatManager.Block("")
-        self.stat.addFields(["rx", "tx", "rxFailed", "txFailed"])
+        self.stat.addFieldsInt(["rx", "tx", "rxFailed", "txFailed", "flashed"])
         statManager.addCounters("SerialConnection", self.stat)
 
     def reset(self):
@@ -462,10 +486,29 @@ class SerialConnection:
             result = True
         except Exception:
             self.stat.rxFailed = self.stat.rxFailed + 1
-            logger.error("Failed to read TTY")
+            #logger.error("Failed to read TTY")
             #traceback.print_exc();
     
         return (result, s)
+    
+    def swFlash(self):
+        count = 0
+        while (True):   
+            (result, data) = self.read(2)
+            if (not result):
+                break
+            if (data == None):
+                break
+            if (data == ""):
+                break
+            count = count + len(data)
+            
+        if (count > 0):
+            logger.error("Flash {0} bytes".format(count))
+        self.stat.flashed = self.stat.flashed + count
+        
+        return count
+        
 
     def name(self):
         return self.device
@@ -483,7 +526,7 @@ class AT91(threading.Thread):
         self.isConnected = False
         self.tty = SerialConnection(device, 115200)
         self.stat = StatManager.Block("")
-        self.stat.addFields(["dump", "write", "executeCode", "failed"])
+        self.stat.addFieldsInt(["dump", "write", "executeCode", "checkFailed", "check", "initOk", "init4", "initBadRsp", "initNoRsp"])
         statManager.addCounters("AT91", self.stat)
         
     def run(self):
@@ -492,6 +535,7 @@ class AT91(threading.Thread):
         '''
         while (not self.exitFlag):
             
+            self.stat.check = self.stat.check + 1
             self.lock.acquire()
             self.__checkConnection()
             self.lock.release()
@@ -501,7 +545,7 @@ class AT91(threading.Thread):
     def __checkConnection(self):
         isConnected = self.__isConnected()
         if (not isConnected):
-            self.stat.failed = self.stat.failed + 1
+            self.stat.checkFailed = self.stat.checkFailed + 1
             self.tty.connect()
         self.__updateConnectionStatus(isConnected)
 
@@ -529,23 +573,40 @@ class AT91(threading.Thread):
                 break
             
             result = False
-            (result, s) = self.tty.read(2)
+            (result, s) = self.tty.read(4)
             if (not result):
                 #logger.error("Failed to read");
                 break
             
             result = False
             if (s == ""):
+                self.stat.initNoRsp = self.stat.initNoRsp + 1 
                 #logger.error("Read no data");
                 break
             
             result = False
-            if (s != "\n\r"):
-                logger.error("Read unexpected data {0}".format(s));
+
+            s1 = ""
+            for c in s:
+                s1 = s1 + "{0}".format(buildhexstring(ord(c), 2)) + " "
+                
+            if (not "\n\r" in s):
+                logger.error("Read unexpected data '{0}'".format(s1));
                 break
+            
+            if (len(s) == 2):
+                self.stat.initOk = self.stat.initOk + 1
+            elif (len(s) == 4):
+                self.stat.initOk = self.stat.init4 + 1
+            else:
+                self.stat.initBadRsp = self.stat.initBadRsp + 1
+                logger.error("Read unexpected data '{0}'".format(s1));
+                
 
             result = True
             break
+
+        self.tty.swFlash()
         
         return result;
         
@@ -572,6 +633,7 @@ class AT91(threading.Thread):
         '''
         s1 = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
         s2 = "G{0}#".format(buildhexstring(address))
+        
         self.stat.executeCode = self.stat.executeCode + 1
         self.lock.acquire()
         
@@ -584,6 +646,8 @@ class AT91(threading.Thread):
         
         if (timeout > 0):
             time.sleep(timeout)
+        
+        self.tty.swFlash()
         
         self.lock.release()
 
@@ -599,6 +663,8 @@ class AT91(threading.Thread):
         self.tty.write(s)
         (result, data) = self.tty.read(size)
         
+        self.tty.swFlash()
+
         self.lock.release()
         
         return (result, data)
@@ -613,6 +679,8 @@ class AT91(threading.Thread):
         self.lock.acquire()
         
         self.tty.write(s)
+        
+        self.tty.swFlash()
         
         self.lock.release()
 
@@ -646,12 +714,19 @@ def printDump(at91, addressStr, sizeStr):
         sizeInt = sizeInt - blockSize
         blocks = blocks + 1
     
+        asciiLine = ""
         for d in data:
-            s = buildhexstring(ord(d), 2)
+            ordD = ord(d)
+            s = buildhexstring(ordD, 2)
+            if ((ordD >= 0x20) and (ordD <= 0x7f)):
+                asciiLine = asciiLine + d
+            else:
+                asciiLine = asciiLine + "."
             print s,
             count = count + 1
             if ((count % 16 == 0) and (count < totalBytes)):
-                print
+                print " {0}".format(asciiLine)
+                asciiLine = ""
                 print "{0}: ".format(buildhexstring(addressInt+count, 8)),
                 
     return True
