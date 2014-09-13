@@ -50,6 +50,16 @@ def convertToInt(s, base):
         result = False;
     return (result, value);
 
+def convertToFloat(s):
+    value = None;
+    try:
+        value = float(s)
+        result = True;
+    except:
+        logger.error("Bad formed number '{0}'".format(s));
+        result = False;
+    return (result, value);
+
 # Open a file for reading or writing
 # Returns handle to the open file and result code False/True
 def openFile(filename, flag):
@@ -249,9 +259,40 @@ class cmdGroundLevel(cmd.Cmd):
         lastcmd = self.lastcmd
         if (lastcmd.startswith("run")):
             pass
+        elif (lastcmd != ""):
+            self.onecmd(lastcmd.strip())
         else:
-            self.onecmd(lastcmd)
+            pass
+
+    def precmd(self, line):
+        '''
+        Handle simple scripts - single line which contains commands separated by ';'
+        '''
+        if (";" in line):
+            commands = line.split(";")
+            for command in commands:
+                if (command != ""):
+                    self.onecmd(command)
+            return "none"
+        else:
+            return line
+              
+    def do_none(self, line):
+        pass
+
+    def do_sleep(self, line):
+        (result, t) = convertToFloat(line)
+        if (result):
+            time.sleep(t)
+        else:
+            self.help_sleep()
         
+    def help_sleep(self):
+        print "Delay execution"
+        print "Usage:sleep secs"
+        print "Example:sleep 0.1"
+        
+      
     def do_status(self, line):
         
         # Get status
