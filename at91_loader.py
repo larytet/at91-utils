@@ -577,12 +577,13 @@ class AT91(threading.Thread):
         while (not self.exitFlag):
             
             self.stat.check = self.stat.check + 1
+            
             self.lock.acquire()
             self.__checkConnection()
             self.lock.release()
             
             time.sleep(0.05)
-
+            
     def __checkConnection(self):
         isConnected = self.__isConnected()
         if (not isConnected):
@@ -590,6 +591,13 @@ class AT91(threading.Thread):
             self.tty.connect()
         self.__updateConnectionStatus(isConnected)
 
+    def getOutput(self, expectedLength):
+        self.lock.acquire()
+        (result, s) = self.tty.read(expectedLength)
+        self.lock.release()
+        
+        return (result, s)
+        
     def waitConnection(self, timeout=1.0):
         loopsTotal = 10
         loops = 0

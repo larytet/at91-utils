@@ -51,9 +51,13 @@ TARGET = firmware
 
 # C source files located from the top-level source directory
 CSRCS = \
-       src/main.c                  \
-       src/sram_startup.S                  \
+       src/main.c                 \
+       src/sram_startup.S        \
        src/ddr.c                  \
+       src/dbgu_console.c         \
+       src/pmc.c                  \
+       src/pio.c                  \
+       src/stdio.c                  \
 
 
 
@@ -61,11 +65,12 @@ CSRCS = \
 ASSRCS = 
 
 # Include path located from the top-level source directory
-INC_PATH = ~/linux-omap/include        
+INC_PATH = ./pt-1.4                    
+        
 
 
 # Library paths from the top-level source directory
-LIB_PATH = ../release/.  
+LIB_PATH =  
 
 # Libraries to link with the project
 LIBS =  
@@ -107,5 +112,5 @@ CFLAGS =
 CPPFLAGS =
 
 # Extra flags${ProjDirPath} to use when linking
-LDFLAGS = -nostartfiles -Wl,-Map=$(OUTPUT).map,--cref,--gc-sections -T"../linker_scripts/sram_samba.ld"   
+LDFLAGS = -nostartfiles -Wl,-Map=$(OUTPUT).map,--cref,--gc-sections -T"../linker_scripts/sram_samba.ld"    
 
