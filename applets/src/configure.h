@@ -12,8 +12,21 @@
 // Build configuration
 #define BOARD BOARD_SAMA5D3X
 #define CONFIGURE_DDR2                  1
-#define CONFIGURE_DDR_TEST              1
+#define CONFIGURE_DDR_TEST              0
 #define CONFIGURE_DDR_TEST_SIZE   (10*1024)
+
+
+/**
+ * CS
+ */
+#define CONFIGURE_CS                   1
+#define CONFIGURE_CS_1                 1
+#define CONFIGURE_CS_2                 1
+
+/**
+ * Enable main loop
+ */
+#define CONFIGURE_MAIN_LOOP            1
 
 /**
  * Enable command loop

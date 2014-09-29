@@ -5,7 +5,7 @@
 Usage:
   at91_loader.py -h | --help
   at91_loader.py --version
-  at91_loader.py  -i | --interactive
+  at91_loader.py [--device=<STR>] -i | --interactive  
   at91_loader.py run [--device=<STR>] [--filename=<STR>] [--address=<HEX>] [--interactive]  
   at91_loader.py dump [--device=<STR>] --address=<HEX> [--size=<INT>]  [--interactive] 
   at91_loader.py read [--device=<STR>] --address=<HEX> [--interactive]
@@ -14,7 +14,7 @@ Usage:
 Options:
   -h --help            Show this screen.
   --version            Show version.
-  -d --device=<STR>    Serial device [default: /dev/ttyACM0]
+  -d --device=<STR>    Serial device [default: /dev/ttyUSB0]
   -a --address=<HEX>   Address where dump memory starts or code is loaded [default: 308000]
   -f --filename=<STR>  BIN file for execution [default: ./applets/mk/firmware.bin]
   -s --size=<INT>      Size of the dump [default: 256]
@@ -60,9 +60,13 @@ def convertToFloat(s):
         result = False;
     return (result, value);
 
-# Open a file for reading or writing
-# Returns handle to the open file and result code False/True
+ 
+ 
 def openFile(filename, flag):
+    '''
+    Open a file for reading or writing
+    Returns handle to the open file and result code False/True
+    '''
     try:
         fileHandle = open(filename, flag) # read text file
     except Exception:
@@ -84,6 +88,10 @@ def buildhexstring(value, width=0, prefix=''):
     valueStr = prefix + valueStr
 
     return valueStr
+
+def converBinToInt(d):
+    result = (ord(d[0]) << 0) | (ord(d[1]) << 8) | (ord(d[2]) << 16) | (ord(d[3]) << 24)
+    return result
 
 
 class StatManager:
@@ -247,9 +255,14 @@ class cmdGroundLevel(cmd.Cmd):
         I can not subclass old style class
         '''
         self.at91 = at91
+        self.cmdLoop = CmdLoop(at91)
+
         (self.dumpAddressStr, self.dumpSizeStr) = ('0x308000', '256')
         (self.runFilename, self.runAddressStr) = ('./applets/mk/firmware.bin', '308000')
-        (self.writeAddressStr, self.writeValueStr) = ('0x308000', '11AE325501') 
+        (self.writeAddressStr, self.writeValueStr) = ('0x308000', '11AE3255')
+        self.readAddressStr = '0x308000'
+        (self.flashAppletFilename, self.flashRunAddressStr, self.flashImage, self.flashAddressStr) = ('./applets/mk/firmware.bin', '0x308000', 'sama5d3xek-nandflashboot-uboot-3.6.0.bin', "0")
+        (self.cmdCommand, self.cmdPayload) = "0x03", ""
     
     
     def emptyline(self):
@@ -258,6 +271,8 @@ class cmdGroundLevel(cmd.Cmd):
         '''
         lastcmd = self.lastcmd
         if (lastcmd.startswith("run")):
+            pass
+        if (lastcmd.startswith("command")):
             pass
         elif (lastcmd != ""):
             self.onecmd(lastcmd.strip())
@@ -307,6 +322,10 @@ class cmdGroundLevel(cmd.Cmd):
             print "Dump default args: addrress={0} size={1}".format(self.dumpAddressStr, self.dumpSizeStr)
             print "Run default args: filename={0} address={1}".format(self.runFilename, self.runAddressStr)
             print "Write default args: addrress={0} value={1}".format(self.writeAddressStr, self.writeValueStr)
+            print "Read default args: addrress={0}".format(self.readAddressStr)
+            print "Flash default args: applet={0}, image={1}, addrress={2}".format(self.flashAppletFilename, self.flashRunAddressStr, self.flashImage, self.flashAddressStr)
+            print "Command default args: command {0}, payload={1}".format(self.cmdCommand, self.cmdPayload)
+            
             
         
     def help_status(self):
@@ -351,13 +370,76 @@ class cmdGroundLevel(cmd.Cmd):
         else:
             self.help_run()
 
+        waitOuput(at91)
+        #self.at91.connectionPollEnable(True)
+
     def help_run(self):
         print "Load and run code"
-        print "Usage:dump [fileaname=<STR>] [address=<HEX>]"
+        print "Usage:run [fileaname=<STR>] [address=<HEX>]"
         print "Default args: filename={0} address={1}".format(self.runFilename, self.runAddressStr)
+
+    def do_flash(self, line):
+        words = line.split()
+        while (True):
+            if (len(words) == 0):
+                result = executeCode(at91, self.flashAppletFilename, self.flashRunAddressStr)
+                waitOuput(at91)
+                if (not result):
+                    break
+                
+                self.cmdLoop.sendCommand(self.cmdLoop.CMD_EXIT)
+                waitOuput(at91)
+            break
+                
+        self.at91.connectionPollEnable(True)
+
+        #  Load applet
+        #  Load image
+        #  Send erase flash 
+        #  Write data 
+        
+    def help_flash(self):
+        print "Program serial flash with BIN file"
+        print "Usage:flash [applet=<STR>] [appletAddress=<HEX>] [imageFile=<STR>] [flashAddress=<HEX>]"
+        print "Default args: applet={0} appletAddress={1} image={2} flashAddress={3}".format(self.flashAppletFilename, self.flashImage, self.flashAddressStr)
+
+    def do_command(self, line):
+        self.at91.connectionPollEnable(False)
+        
+        words = line.split()
+        if (len(words) == 0):
+            (result, cmdCommand) = convertToInt(self.cmdCommand, 16)
+            if (not result): return; 
+            self.cmdLoop.sendCommand(cmdCommand)
+        if (len(words) == 1):
+            (result, cmdCommand) = convertToInt(words[0], 16)
+            if (not result): return; 
+            self.cmdLoop.sendCommand(cmdCommand)
+            self.cmdCommand = words[0]
+            
+        waitOuput(at91, 1.0)
+        self.at91.connectionPollEnable(True)
+        
+        
+    def help_command(self):
+        print "Send command to the applet"
+        print "Usage:command  command=<HEX>"
+        print "Default args: command={0} payload='{1}'".format(self.cmdCommand, self.cmdPayload)
         
     def do_read(self, line):
-        print "Read memory"
+        words = line.split()
+        if (len(words) == 1):
+            result = readMemory(self.at91, words[0])
+            if (result):
+                self.readAddressStr = words[0]
+        elif (len(words) == 0): 
+            readMemory(self.at91, self.readAddressStr)
+        else:
+            self.help_read()
+
+    def help_read(self):
+        print "Usage:read [address=<HEX>]"
+        print "Default args: addrress={0}".format(self.readAddressStr)
 
     def do_write(self, line):
         words = line.split()
@@ -434,7 +516,7 @@ class SerialConnection:
         self.tty = tty
         self.device = device
         self.stat = StatManager.Block("")
-        self.stat.addFieldsInt(["rx", "tx", "rxFailed", "txFailed", "flashed"])
+        self.stat.addFieldsInt(["rx", "tx", "rxFailed", "txFailed", "flushed"])
         statManager.addCounters("SerialConnection", self.stat)
 
     def reset(self):
@@ -495,7 +577,8 @@ class SerialConnection:
 
     def write(self, data):
         '''
-        write data represented to the tty
+        write data to the tty
+        @param data:string to write 
         '''
         tty = self.tty
         result = False
@@ -508,6 +591,24 @@ class SerialConnection:
             result = True
         except Exception:
             self.stat.txFailed = self.stat.txFailed + 1
+            #tty.flush();
+            #traceback.print_exc();
+            
+        return result
+
+    def write2(self, data):
+        '''
+        write data to the tty
+        @param data:string to write 
+        '''
+        tty = self.tty
+        result = False
+        if (not tty.isOpen()):
+            return False
+        try:
+            tty.write(data);
+        except Exception:
+            pass
             #tty.flush();
             #traceback.print_exc();
             
@@ -532,8 +633,9 @@ class SerialConnection:
     
         return (result, s)
     
-    def swFlash(self):
+    def swFlush(self):
         count = 0
+        s = ""
         while (True):   
             (result, data) = self.read(2)
             if (not result):
@@ -542,11 +644,14 @@ class SerialConnection:
                 break
             if (data == ""):
                 break
+            if (len(data) == 0):
+                break
             count = count + len(data)
+            s = s + data
             
-        if (count > 0):
-            logger.error("Flash {0} bytes".format(count))
-        self.stat.flashed = self.stat.flashed + count
+        #if (count > 0):
+        #    logger.error("Flush {0} bytes '{1}'".format(count, s))
+        self.stat.flushed = self.stat.flushed + count
         
         return count
         
@@ -554,7 +659,56 @@ class SerialConnection:
     def name(self):
         return self.device
 
+class CmdLoop:
+    '''
+    Methods to send command to the applet.
+    Command contains command IP, command size, optional payload and checksum
+    '''
+    CMD_PING            = 0x03
+    CMD_EXIT            = 0x04
 
+    def __init__(self, at91):
+        self.at91 = at91 
+    
+    def calculateChecksum(self, data):
+        '''
+        Command loop of the applet requires simple checksum in the end 
+        of the message 
+        '''
+        sum = 0;
+        for b in data:
+            sum = sum + (b & 0xFF);
+            sum = sum & 0xFF
+        sum = (~sum)+1
+        sum = sum & 0xFF
+        return sum;
+    
+    def buildCommand(self, command, payload):
+        '''
+        Concatenate command, payload and checksum
+        '''
+        if (payload != None):
+            command = [command] + [len(payload)+1] + payload;
+        else:
+            command = [command] + [0x01];
+        cs = self.calculateChecksum(command)
+        command = command + [cs];
+        
+        return command;
+    
+    def sendCommand(self, command, payload=None):
+        '''
+        @param command:CMD_PING, CMD_EXIT, ... 
+        '''
+        command = self.buildCommand(command, payload)
+        s = "".join(map(chr, command))
+        self.at91.getTTY().write2(s)
+        s = ""
+        for c in command:
+            s = s + "{0}".format(buildhexstring(c, 2)) + " "
+        logger.info("Sent command {}".format(s))
+    
+    
 class AT91(threading.Thread):
     
     '''
@@ -565,9 +719,10 @@ class AT91(threading.Thread):
         self.lock = threading.Lock()
         self.exitFlag = False
         self.isConnected = False
+        self.skipConnectionPoll = False
         self.tty = SerialConnection(device, 115200)
         self.stat = StatManager.Block("")
-        self.stat.addFieldsInt(["dump", "write", "executeCode", "checkFailed", "check", "initOk", "init4", "initBadRsp", "initNoRsp"])
+        self.stat.addFieldsInt(["dump", "read", "write", "failedRead", "failedWrite", "executeCode", "checkFailed", "check", "initOk", "init4", "initBadRsp", "initNoRsp"])
         statManager.addCounters("AT91", self.stat)
         
     def run(self):
@@ -576,11 +731,12 @@ class AT91(threading.Thread):
         '''
         while (not self.exitFlag):
             
-            self.stat.check = self.stat.check + 1
+            if (not self.skipConnectionPoll):
+                self.stat.check = self.stat.check + 1
             
-            self.lock.acquire()
-            self.__checkConnection()
-            self.lock.release()
+                self.lock.acquire()
+                self.__checkConnection()
+                self.lock.release()
             
             time.sleep(0.05)
             
@@ -591,12 +747,26 @@ class AT91(threading.Thread):
             self.tty.connect()
         self.__updateConnectionStatus(isConnected)
 
-    def getOutput(self, expectedLength):
+    def connectionPollEnable(self, enable):
+        '''
+        Allows to disable conneciton polling 
+        For example if waiting for output from the applet
+        '''
+        self.skipConnectionPoll = not enable
+
+    def getOutput(self, expectedLength=80):
         self.lock.acquire()
         (result, s) = self.tty.read(expectedLength)
         self.lock.release()
         
         return (result, s)
+
+    def sendData(self, data):
+        self.lock.acquire()
+        result = self.tty.write(data)
+        self.lock.release()
+        
+        return result
         
     def waitConnection(self, timeout=1.0):
         loopsTotal = 10
@@ -619,18 +789,18 @@ class AT91(threading.Thread):
             INIT_COMMAND = "N#"
             result = self.tty.write(INIT_COMMAND)
             if (not result):
+                self.stat.failedWrite = self.stat.failedWrite + 1 
                 break
             
             result = False
             (result, s) = self.tty.read(4)
             if (not result):
-                #logger.error("Failed to read");
+                self.stat.failedRead = self.stat.failedRead + 1 
                 break
             
             result = False
             if (s == ""):
                 self.stat.initNoRsp = self.stat.initNoRsp + 1 
-                #logger.error("Read no data");
                 break
             
             result = False
@@ -655,7 +825,7 @@ class AT91(threading.Thread):
             result = True
             break
 
-        self.tty.swFlash()
+        self.tty.swFlush()
         
         return result;
         
@@ -680,23 +850,30 @@ class AT91(threading.Thread):
         '''
         Load binary code to the specified location, execute, wait for completion
         '''
-        s1 = "S{0},{1}#".format(buildhexstring(address), buildhexstring(len(code)))  
         s2 = "G{0}#".format(buildhexstring(address))
         
         self.stat.executeCode = self.stat.executeCode + 1
         self.lock.acquire()
         
         # copy the code 
-        self.tty.write(s1)
-        self.tty.write(code)
+        words = len(code)/4
+        index  = 0
+        while (words > 0):
+            
+            data = code[index:index+4]
+            value = converBinToInt(data)
+            self.__write(address, value)
+
+            address = address + 4
+            words = words - 1
+            index = index + 4
         
+        self.tty.swFlush()
         # execute the code
         self.tty.write(s2)
         
         if (timeout > 0):
             time.sleep(timeout)
-        
-        self.tty.swFlash()
         
         self.lock.release()
 
@@ -704,36 +881,109 @@ class AT91(threading.Thread):
         '''
         Read memory from the device
         '''
-        s = "R{0},{1}#".format(buildhexstring(address), buildhexstring(size))
           
         self.stat.dump = self.stat.dump + 1
+        words = size/4
+        
+        data = ""
         self.lock.acquire()
         
-        self.tty.write(s)
-        (result, data) = self.tty.read(size)
+        while (words > 0):
+            (result, d) = self.__read(address)
+            words = words - 1
+            address = address + 4
+            if (result and (len(d)> 0)):
+                data = data + d
+            else:
+                break
         
-        self.tty.swFlash()
-
+        self.tty.swFlush()
         self.lock.release()
         
         return (result, data)
+
+    def getTTY(self):
+        return self.tty
     
-    def write(self, address, data):
+    def __write(self, address, data):
         '''
         Write memory
         '''
         s = "W{0},{1}#".format(buildhexstring(address), buildhexstring(data))
         
-        self.stat.write = self.stat.write + 1
-        self.lock.acquire()
-        
         self.tty.write(s)
         
-        self.tty.swFlash()
         
+        return True
+
+    
+    def write(self, address, data):
+        '''
+        Write memory
+        '''
+        self.stat.write = self.stat.write + 1
+        
+        self.lock.acquire()
+        
+        result = self.__write(address, data)
+        
+        self.tty.swFlush()
         self.lock.release()
 
-        return True
+        return result
+
+    def __read(self, address):
+        '''
+        Read memory from the device
+        '''
+        s = "w{0},4#".format(buildhexstring(address))
+          
+        self.tty.write(s)
+        (result, data) = self.tty.read(4)
+        
+        return (result, data)
+
+    def read(self, address):
+        '''
+        Read memory from the device
+        '''
+        self.stat.read = self.stat.read + 1
+
+        self.lock.acquire()
+
+        (result, data) = self.__read(address)        
+        
+        self.tty.swFlush()
+        
+        self.lock.release()
+        
+        return (result, data)
+
+def binToHex(data):
+    result = ""
+    for d in data:
+        ordD = ord(d)
+        s = buildhexstring(ordD, 2)
+        result = result + s
+        
+    return result
+    
+def readMemory(at91, addressStr):
+    (result, addressInt) = convertToInt(addressStr, 16)    
+    if (not result):
+       logger.error("Address '{0}' is not valid hexadecimal integer".format(addressStr))
+       return result
+   
+    (result, data) = at91.read(addressInt)
+    
+    if (result and (len(data) > 0)):
+        s = binToHex(data)
+        print s
+    else:
+       logger.error("Failed to read result={0}, len={1}".format(result, len(data)))
+         
+    
+    return (result, data)
 
 def printDump(at91, addressStr, sizeStr):
     
@@ -752,6 +1002,7 @@ def printDump(at91, addressStr, sizeStr):
     blocks = 0
     totalBytes = sizeInt 
     print "{0}: ".format(buildhexstring(addressInt, 8)),
+    asciiLine = ""
     while (sizeInt > 0):    
         if (sizeInt > blockSize):
             (result, data) = at91.dump(addressInt+blocks*blockSize, blockSize)
@@ -763,7 +1014,6 @@ def printDump(at91, addressStr, sizeStr):
         sizeInt = sizeInt - blockSize
         blocks = blocks + 1
     
-        asciiLine = ""
         for d in data:
             ordD = ord(d)
             s = buildhexstring(ordD, 2)
@@ -777,10 +1027,11 @@ def printDump(at91, addressStr, sizeStr):
                 print " {0}".format(asciiLine)
                 asciiLine = ""
                 print "{0}: ".format(buildhexstring(addressInt+count, 8)),
+    print " {0}".format(asciiLine)
                 
     return True
 
-def executeCode(at91, filename, addressStr, timeout=5.0):
+def executeCode(at91, filename, addressStr, timeout=0.1):
     file = None
 
     (result, addressInt) = convertToInt(addressStr, 16)    
@@ -804,16 +1055,34 @@ def executeCode(at91, filename, addressStr, timeout=5.0):
             logger.error("Read {0} bytes instead of {1} from file {2}".format(len(data), fileSize, filename))
             break;
     
-        at91.executeCode(addressInt, addressInt, data) 
-        
-        if (timeout > 0):
-            at91.waitConnection(timeout)
+        logger.info("Load Code {0}".format(filename))
+        at91.connectionPollEnable(False)
+
+        at91.executeCode(addressInt, addressInt, data)
+        logger.info("Code {0} is running, wait for output".format(filename))
+
+        waitOuput(at91, timeout)
 
         break
     
     if (file != None):
         file.close()
-        
+
+def waitOuput(at91, timeout=1):
+    LOOPS = 5
+    loops = LOOPS
+    
+    # Force floating point calculation
+    loopDelay = (1.0*timeout)/loops
+
+    while (loops > 0):
+        (result, s) = at91.getOutput(80)
+        if (result and (len(s) > 0)):
+            logger.info(">{}".format(s))
+            loops = LOOPS
+            
+        loops = loops - 1
+        time.sleep(loopDelay) 
         
 def writeData(at91, addressStr, valueStr):
     
@@ -852,6 +1121,7 @@ if __name__ == '__main__':
         
     if (arguments['run']):
         executeCode(at91, arguments['--filename'], arguments['--address'])
+        self.at91.connectionPollEnable(True)
 
     if (arguments['write']):
         writeData(at91, arguments['--address'], arguments['--data'])

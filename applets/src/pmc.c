@@ -34,6 +34,7 @@
 #include "configure.h"
 #include "board.h"
 #include "dbgu_console.h"
+#include "cmd.h"
 
 
 /*----------------------------------------------------------------------------

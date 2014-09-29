@@ -43,7 +43,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
-#include <stdarg.h>
 
 
 #include "configure.h"
@@ -142,13 +141,12 @@ extern void DBGU_Configure( uint32_t baudrate, uint32_t masterClock)
 
     /* Configure mode register */
     CONSOLE_DBGU->DBGU_MR = DBGU_MR_CHMODE_NORM | DBGU_MR_PAR_NONE;
-    
     /* Reset and disable receiver & transmitter */
     CONSOLE_DBGU->DBGU_CR = DBGU_CR_RSTRX | DBGU_CR_RSTTX;
     CONSOLE_DBGU->DBGU_IDR = 0xFFFFFFFF;
     CONSOLE_DBGU->DBGU_CR = DBGU_CR_RXDIS | DBGU_CR_TXDIS;
     /* Configure baudrate */
-    CONSOLE_DBGU->DBGU_BRGR = (masterClock / baudrate) / 16;
+    CONSOLE_DBGU->DBGU_BRGR = (masterClock / baudrate) / 16; // 0x1a; //(masterClock / baudrate) / 16;
     /* Enable receiver and transmitter */
     CONSOLE_DBGU->DBGU_CR = DBGU_CR_RXEN | DBGU_CR_TXEN;
 }
@@ -190,12 +188,16 @@ extern void DBGU_PutBuffer(const uint8_t* s, int len)
  * \brief Input a character from the DBGU line.
  *
  * \note This function is synchronous
- * \return character received.
+ * \return character 1 if Ok.
  */
-extern uint32_t DBGU_GetChar( void )
+extern uint32_t DBGU_GetChar(unsigned char *c)
 {
-    while ( (CONSOLE_DBGU->DBGU_SR & DBGU_SR_RXRDY) == 0 ) ;
-    return CONSOLE_DBGU->DBGU_RHR ;
+    uint32_t res;
+
+    res = ( (CONSOLE_DBGU->DBGU_SR & DBGU_SR_RXRDY) > 0 ) ;
+    *c = (unsigned char)CONSOLE_DBGU->DBGU_RHR ;
+
+    return res;
 }
 
 /**
@@ -209,17 +211,3 @@ extern uint32_t DBGU_IsRxReady( void )
 }
 
 
-extern void DBGU_Trace(const char *fmt,  ... )
-{
-    va_list ap;
-    int ret;
-    char buf[64];
-    va_start(ap, fmt);
-    ret = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if ((ret > 0) && (ret < sizeof(buf)))
-    {
-    	DBGU_PutBuffer((unsigned char*)buf, ret);
-    }
-    return ;
-}

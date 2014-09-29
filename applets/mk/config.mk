@@ -58,6 +58,8 @@ CSRCS = \
        src/pmc.c                  \
        src/pio.c                  \
        src/stdio.c                  \
+       src/cmd.c                  \
+#       src/spiflash/at25d.c                  \
 
 
 
@@ -65,7 +67,7 @@ CSRCS = \
 ASSRCS = 
 
 # Include path located from the top-level source directory
-INC_PATH = ./pt-1.4                    
+INC_PATH = ./src/pt-1.4 ./src                    
         
 
 

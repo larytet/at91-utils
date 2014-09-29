@@ -36,12 +36,6 @@
 
 #include "configure.h"
 
-#if defined(CONFIGURE_TRACE)
-#define TRACE_DEBUG(fmt, ... )      DBGU_Trace(fmt,  ##__VA_ARGS__)
-#else
-#define TRACE_DEBUG(fmt, ... )      { }
-#endif
-
 /** Console baudrate always using 115200. */
 #define CONSOLE_BAUDRATE    115200
 
@@ -52,8 +46,7 @@ extern void DBGU_Configure( uint32_t dwBaudrate, uint32_t dwMasterClock ) ;
 extern void DBGU_PutChar( uint8_t uc ) ;
 extern void DBGU_PutStr(const char* s);
 extern void DBGU_PutBuffer(const uint8_t* s, int len);
-extern uint32_t DBGU_GetChar( void ) ;
+uint32_t DBGU_GetChar(unsigned char *c) ;
 extern uint32_t DBGU_IsRxReady( void ) ;
-extern void DBGU_Trace(const char *fmt,  ... );
 
 #endif /* _DBGU_CONSOLE_ */
